@@ -1,10 +1,17 @@
 import { createElement, Component ,render } from "./toy-react";
 
 class MyCom extends Component{
+  constructor() {
+    super();
+    this.state = {
+      a:1
+    }
+  }
   render(){
     return <div>
       my Component
-      {this.children}
+      <button onClick={()=>{ this.setState({a: this.state.a + 1}) }}>add</button>
+      {this.state.a.toString()}
     </div>
   }
 }
