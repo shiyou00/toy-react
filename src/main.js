@@ -19,9 +19,8 @@ class MyCom extends Component{
 let app = (
   <MyCom id="a">
     <p>abc</p>
-    <p></p>
-    <p></p>
+    <p>bcd</p>
   </MyCom>
 );
 
-render(app,document.body);
+render(app,document.getElementById("root"));

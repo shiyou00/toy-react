@@ -1,44 +1,10 @@
-const RENDER_TO_DOM = Symbol("render to dom");
+function replaceContent(range,node){
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.deleteContents();
 
-class ElementWrapper{
-  constructor(type) {
-    this.root = document.createElement(type);
-  }
-
-  setAttribute(name,value){
-    if(name.match(/^on([\s\S]+)$/)){
-      this.root.addEventListener(RegExp.$1.replace(/^[\s\S]/,(c)=> c.toLocaleLowerCase()),value);
-    }else{
-      if(name === 'className'){
-        this.root.setAttribute("class",value);
-      }else{
-        this.root.setAttribute(name,value);
-      }
-    }
-  }
-
-  appendChild(component){
-    let range = document.createRange();
-    range.setStart(this.root,this.root.childNodes.length);
-    range.setEnd(this.root,this.root.childNodes.length);
-    component[RENDER_TO_DOM](range);
-  }
-
-  [RENDER_TO_DOM](range){
-    range.deleteContents();
-    range.insertNode(this.root);
-  }
-}
-
-class TextWrapper{
-  constructor(content) {
-    this.root = document.createTextNode(content);
-  }
-
-  [RENDER_TO_DOM](range){
-    range.deleteContents();
-    range.insertNode(this.root);
-  }
+  range.setStartBefore(node);
+  range.setEndAfter(node);
 }
 
 export class Component {
@@ -56,32 +22,80 @@ export class Component {
     this.children.push(component);
   }
 
-  [RENDER_TO_DOM](range){
-    this._range = range;
-    this.render()[RENDER_TO_DOM](range);
+  get vdom(){
+    return this.render().vdom;
   }
 
-  rerender(){
-    // 保存老range
-    let oldRange = this._range;
+  renderDOM(range){
+    this._range = range;
+    this._vdom = this.vdom;
+    this._vdom.renderDOM(range);
+  }
 
-    // 创建新range，设置成老的 range 起点
-    let range = document.createRange();
-    range.setStart(oldRange.startContainer, oldRange.startOffset);
-    range.setEnd(oldRange.startContainer, oldRange.startOffset);
-    this[RENDER_TO_DOM](range);
+  update(){
+    let isSameNode = (oldNode, newNode)=>{
+      console.log('oldNode,newNode',oldNode,newNode);
+      if(oldNode.type !== newNode.type){
+        return false;
+      }
 
-    // 完成插入之后，老的range的start挪动到插入的range之后
-    oldRange.setStart(range.endContainer, range.endOffset);
-    oldRange.deleteContents();
+      for(let name in newNode.props){
+        if(newNode.props[name] !== oldNode.props[name]){
+          return false;
+        }
+      }
 
-    // 这块不纠结，后面要修改掉
+      if(Object.keys(oldNode.props).length > Object.keys(newNode.props).length){
+        return false;
+      }
+
+      if(newNode.type === '#text'){
+        if(newNode.content !== oldNode.content){
+          return false;
+        }
+      }
+      return true;
+    }
+
+    let update = (oldNode, newNode)=>{
+      if(!isSameNode(oldNode,newNode)){
+        newNode.renderDOM(oldNode._range);
+        return;
+      }
+      newNode._range = oldNode._range;
+
+      let newChildren = newNode.vchildren;
+      let oldChildren = oldNode.vchildren;
+
+      if(!newChildren || !newChildren.length){
+        return ;
+      }
+
+      let tailRange = oldChildren[oldChildren.length -1]._range;
+
+      for(let i=0;i<newChildren.length;i++){
+        let newChild = newChildren[i];
+        let oldChild = oldChildren[i];
+        if(i<oldChildren.length){
+          update(oldChild,newChild);
+        }else{
+          let range = document.createRange();
+          range.setStart(tailRange.endContainer,tailRange.endOffset);
+          range.endStart(tailRange.endContainer,tailRange.endOffset);
+          newChild.renderDOM(range);
+          tailRange = range;
+        }
+      }
+    }
+    let vdom = this.vdom; // 获取最新的VDOM
+    update(this._vdom,vdom);
+    this._vdom = vdom;
   }
 
   setState(newState){
     if(this.state === null || typeof this.state !== "object"){
       this.state = newState;
-      this.rerender();
+      this.update();
       return;
     }
     let merge = (oldState,newState)=>{
@@ -95,12 +109,73 @@ export class Component {
     }
 
     merge(this.state,newState);
-    this.rerender();
+    this.update();
+  }
+}
+
+class ElementWrapper extends Component{
+  constructor(type) {
+    super(type);
+    this.type = type;
+  }
+
+  get vdom (){
+    this.vchildren = this.children.map(child => child.vdom);
+    return this;
+  }
+
+  renderDOM(range){
+    this._range = range;
+    let root = document.createElement(this.type);
+
+    for(let name in this.props){
+      let value = this.props[name];
+      if(name.match(/^on([\s\S]+)$/)){
+        root.addEventListener(RegExp.$1.replace(/^[\s\S]/,(c)=> c.toLocaleLowerCase()),value);
+      }else{
+        if(name === 'className'){
+          root.setAttribute("class",value);
+        }else{
+          root.setAttribute(name,value);
+        }
+      }
+    }
+
+    if(!this.vchildren) {
+      this.vchildren = this.children.map(child => child.vdom);
+    }
+
+    for (let child of this.vchildren){
+      let childRange = document.createRange();
+      childRange.setStart(root,root.childNodes.length);
+      childRange.setEnd(root,root.childNodes.length);
+      child.renderDOM(childRange);
+    }
+
+    replaceContent(range,root);
+  }
+}
+
+class TextWrapper extends Component{
+  constructor(content) {
+    super(content);
+    this.type = "#text";
+    this.content = content;
+  }
+
+  get vdom(){
+    return this;
+  }
+
+  renderDOM(range){
+    this._range = range;
+    let root = document.createTextNode(this.content);
+    replaceContent(range,root);
   }
 }
 
 export function createElement(type,attributes,...children){
-  console.log(type,attributes,children);
+  console.log("createElement",type,attributes,children);
   // 根据 type 创建DOM节点
   let e ;
   // 如果 type 是字符型说明是原生标签如div，那么直接调用 ElementWrapper
@@ -110,7 +185,7 @@ export function createElement(type,attributes,...children){
     // 如果 type 是自定义 Class 的话则直接实例化
     e = new type;
   }
-
+  console.log("e",e);
   // 设置属性
   for(let p in attributes){
     e.setAttribute(p,attributes[p]);
@@ -146,5 +221,6 @@ export function render(component,parentElement) {
   range.setStart(parentElement,0);
   range.setEnd(parentElement,parentElement.childNodes.length);
   range.deleteContents();
-  component[RENDER_TO_DOM](range);
+
+  component.renderDOM(range);
 }
